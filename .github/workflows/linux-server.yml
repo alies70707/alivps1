@@ -1,0 +1,81 @@
+name: Permanent Linux SSH Server
+
+on:
+  schedule:
+    - cron: '0 */6 * * *'  # روشن شدن خودکار هر ۶ ساعت یک‌بار (۲۴/۷)
+  workflow_dispatch:        # استارت دستی با دکمه Run
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 360
+
+    steps:
+      - name: 1. Checkout Repository
+        uses: actions/checkout@v4
+
+      # بازیابی هارد ابری دائمی
+      - name: 2. Restore Persistent Workspace
+        uses: actions/cache@v4
+        with:
+          path: /home/cynetadmin/workspace
+          key: cynet-ssh-workspace-${{ github.run_id }}
+          restore-keys: |
+            cynet-ssh-workspace-
+
+      - name: 3. Setup OpenSSH Server
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y openssh-server
+          
+          # فعال‌سازی لاگین با پسورد
+          sudo sed -i 's/#PasswordAuthentication yes/PasswordAuthentication yes/' /etc/ssh/sshd_config
+          sudo sed -i 's/PasswordAuthentication no/PasswordAuthentication yes/' /etc/ssh/sshd_config
+          sudo systemctl restart ssh
+
+      - name: 4. Create User (cynetadmin) with Root Access
+        run: |
+          sudo useradd -m -s /bin/bash cynetadmin || true
+          echo "cynetadmin:Cynet@2026" | sudo chpasswd
+          sudo usermod -aG sudo cynetadmin
+          echo "cynetadmin ALL=(ALL) NOPASSWD:ALL" | sudo tee /etc/sudoers.d/cynetadmin
+          
+          # ساخت و مجوز پوشه هارد دائمی
+          sudo mkdir -p /home/cynetadmin/workspace
+          sudo chown -R cynetadmin:cynetadmin /home/cynetadmin/workspace
+
+      - name: 5. Connect Tailscale VPN & Show Access Info
+        env:
+          TAILSCALE_AUTHKEY: ${{ secrets.TAILSCALE_AUTHKEY }}
+        run: |
+          curl -fsSL https://tailscale.com/install.sh | sh
+          sudo tailscale up --authkey="$TAILSCALE_AUTHKEY" --hostname="cynet-linux-ssh"
+          
+          TS_IP=$(tailscale ip -4)
+          
+          echo "=================================================="
+          echo "  >>> PERMANENT LINUX SSH SERVER IS LIVE! <<<"
+          echo "  Tailscale IP  : $TS_IP"
+          echo "  Username      : cynetadmin"
+          echo "  Password      : Cynet@2026"
+          echo "  ------------------------------------------------"
+          echo "  💻 Connect via Terminal / CMD:"
+          echo "  >> ssh cynetadmin@$TS_IP"
+          echo "  ------------------------------------------------"
+          echo "  💾 Persistent Folder : /home/cynetadmin/workspace"
+          echo "=================================================="
+
+      - name: 6. Server Keep-Alive (5h 55m)
+        run: |
+          for i in {1..355}; do
+            sleep 60
+            echo "[$i/355] Linux SSH Server is active..."
+          done
+
+      # ذخیره خودکار فایل‌های پوشه دائمی قبل از ری‌استارت
+      - name: 7. Save Workspace to Cloud
+        uses: actions/cache@v4
+        if: always()
+        with:
+          path: /home/cynetadmin/workspace
+          key: cynet-ssh-workspace-${{ github.run_id }}
